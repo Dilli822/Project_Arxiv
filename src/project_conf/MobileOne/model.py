@@ -1,9 +1,16 @@
 import pytorch_lightning as pl 
 import torch
-import torchmetrics
 
+from torch import nn
+from torchmetrics import AUROC
+from torchmetrics.classification import (
+    BinaryAccuracy,
+    BinaryPrecision,
+    BinaryRecall,
+    BinaryF1Score,
+    BinaryAUROC
+)
 
-from torch import nn 
 from mobileone import mobileone
 
 
@@ -30,10 +37,11 @@ class SkcMobileNet(pl.LightningModule):
         self.loss_fn = nn.BCEWithLogitsLoss()
         
         # Setup Metrics
-        self.accuracy = torchmetrics.Accuracy(task="binary") 
-        self.f1_score = torchmetrics.F1Score(task="binary")
-        self.recall = torchmetrics.Recall(task="binary")
-        self.precision = torchmetrics.Precision(task="binary")
+        self.accuracy = BinaryAccuracy() 
+        self.f1_score = BinaryF1Score()
+        self.recall = BinaryRecall()
+        self.precision = BinaryPrecision()
+        self.auroc = BinaryAUROC()
         
         self.save_hyperparameters(ignore=["model"])
         
@@ -50,14 +58,14 @@ class SkcMobileNet(pl.LightningModule):
                 optimizer, 
                 mode='min', 
                 factor=0.5,
-                patience=2,
+                patience=1,
                 threshold=3e-2,
                 threshold_mode='rel',
                 min_lr=1e-5
             ),
             'monitor': 'val_loss',
             'interval': 'epoch',
-            'frequency': 1            # Apply scheduler after every epoch
+            'frequency': 1 
         }
         
         return [optimizer], [scheduler]
@@ -68,39 +76,47 @@ class SkcMobileNet(pl.LightningModule):
         outputs = self.forward(X).squeeze()
         loss = self.loss_fn(outputs, y)
     
-        y_pred = torch.round(torch.sigmoid(outputs))
+        y_prob = torch.sigmoid(outputs)
+        y_pred = torch.round(y_prob)
         accuracy = self.accuracy(y_pred, y.int())
     
         if compute_extra_metrics:
             precision = self.precision(y_pred, y.int())
             recall = self.recall(y_pred, y.int())
             f1_score = self.f1_score(y_pred, y.int())
+            auc = self.auroc(y_prob, y.int())
         else:
-            precision = recall = f1_score = None
+            precision = recall = f1_score = auc = None
     
-        return loss, accuracy, precision, recall, f1_score
+        return loss, accuracy, precision, recall, f1_score, auc
 
     def training_step(self, batch, batch_idx):
-        loss, accuracy, _, _, _ = self._common_step(batch, batch_idx, compute_extra_metrics=False)
-        self._log_metrics(prefix="", loss=loss, accuracy=accuracy, precision=None, recall=None, f1_score=None, on_step=False, on_epoch=True)
+        loss, accuracy, _, _, _, _ = self._common_step(batch, batch_idx, compute_extra_metrics=False)
+        self._log_metrics(prefix="", 
+                          loss=loss, 
+                          accuracy=accuracy, 
+                          precision=None, recall=None, f1_score=None, 
+                          auc=None, 
+                          on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss, accuracy, precision, recall, f1_score = self._common_step(batch, batch_idx, compute_extra_metrics=True)
-        self._log_metrics(prefix="val_", loss=loss, accuracy=accuracy, precision=precision, recall=recall, f1_score=f1_score, on_step=False, on_epoch=True)
+        loss, accuracy, precision, recall, f1_score, auc = self._common_step(batch, batch_idx, compute_extra_metrics=True)
+        self._log_metrics(prefix="val_", 
+                          loss=loss, 
+                          accuracy=accuracy, 
+                          precision=precision, recall=recall, f1_score=f1_score, 
+                          auc=auc, 
+                          on_step=False, on_epoch=True)
         return {'val_loss': loss}
-    
-    def test_step(self, batch, batch_idx):
-        loss, accuracy, precision, recall, f1_score = self._common_step(batch, batch_idx, compute_extra_metrics=True)
-        self._log_metrics(prefix="test_", loss=loss, accuracy=accuracy, precision=precision, recall=recall, f1_score=f1_score, on_step=False, on_epoch=True)
-        return {'test_loss': loss}
 
-    def _log_metrics(self, prefix: str, loss, accuracy, precision, recall, f1_score, on_step: bool, on_epoch: bool):
+    def _log_metrics(self, prefix: str, loss, accuracy, precision, recall, f1_score, auc, on_step: bool, on_epoch: bool):
         metrics = {f"{prefix}loss": loss, f"{prefix}accuracy": accuracy}
         if precision is not None: metrics[f"{prefix}precision"] = precision
         if recall is not None: metrics[f"{prefix}recall"] = recall
         if f1_score is not None: metrics[f"{prefix}f1_score"] = f1_score
-    
+        if auc is not None: metrics[f"{prefix}auc"] = auc
+
         self.log_dict(metrics,
                       on_step=on_step,
                       on_epoch=on_epoch,

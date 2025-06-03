@@ -18,29 +18,27 @@ load_dotenv()
 
 def main(args):
     comet_logger = CometLogger(api_key=os.getenv('API_KEY'), 
-                               project_name=os.getenv('PROJECT_NAME'))
+                               project=os.getenv('PROJECT_NAME'))
     
     dataloader = SkinCancerDataModule(train_dir=args.train_dir,
-                                      val_dir=args.val_dir,  
-                                      test_dir=args.test_dir, 
+                                      val_dir=args.val_dir,
                                       batch_size=args.batch_size, 
                                       num_workers=args.data_workers)
     
     # Call setup to initialize datasets
     dataloader.setup('fit')  
     num_classes = dataloader.get_num_classes()
-    pos_weight = dataloader.pos_weight.to(args.device)
+
     # Initialize the model
     model = SkcMobileNet(checkpoint_path=args.checkpoint_path,
                       num_classes=num_classes,
-                      gpu_nodes=args.gpus,
-                      pos_weight=pos_weight).to(args.device)
+                      gpu_nodes=args.gpus).to(args.device)
 
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath="./saved_checkpoint/",       
-        filename='model-{epoch:02d}-{val_loss:.3f}',                                             
-        save_top_k=3,
+        filename='model-{epoch:02d}-{val_loss:.3f}-{val_accuracy:.3f}',                                             
+        save_top_k=5,
         mode='min'
     )
 
@@ -67,7 +65,6 @@ def main(args):
     # Fit the model to the training data using the Trainer's fit method.
     trainer.fit(model, dataloader)
     trainer.validate(model, dataloader)
-    trainer.test(model, dataloader)
 
 
 if __name__  == "__main__":
@@ -86,8 +83,6 @@ if __name__  == "__main__":
                         help='Folder path to load training data')
     parser.add_argument('--val_dir', default=None, required=True, type=str,
                         help='Folder path to load validation data')
-    parser.add_argument('--test_dir', default=None, required=True, type=str,
-                        help='Folder path to load testing data')
 
     parser.add_argument('--checkpoint_path', default=None, required=True, type=str,
                         help='Path to the model checkpoint to load')
