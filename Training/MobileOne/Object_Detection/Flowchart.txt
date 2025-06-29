@@ -1,0 +1,74 @@
+Code Flow Steps:
+
+Import libraries (torch, torchvision, cv2, etc.)
+Define MobileOneBackbone class
+
+Extract stages from base model
+Return dictionary of feature maps
+
+
+Define inspect_model_channels() function
+
+Create dummy input
+Run through backbone
+Measure actual channel dimensions
+
+
+Define load_pretrained_faster_rcnn() function
+
+Load pretrained ResNet50 model
+Set to eval mode
+
+
+Main function starts
+
+Print warning about untrained model
+Get user choice (1 or 2)
+
+
+If choice == 2:
+
+Load pretrained model
+Set model_name
+
+
+If choice == 1:
+
+Run inspect_model_channels()
+Create MobileOne base model
+Create MobileOneBackbone
+Create BackboneWithFPN
+Create FasterRCNN model
+Set model_name
+
+
+Load and preprocess image
+
+Open image file
+Convert to tensor
+
+
+Run inference
+
+Forward pass through model
+Get outputs
+
+
+Set confidence threshold
+
+0.8 for pretrained
+0.95 for untrained
+
+
+Filter detections
+
+Loop through boxes
+Check confidence > threshold
+Draw bounding boxes
+Add labels
+
+
+Display results
+
+Show image with boxes
+Print detection summary

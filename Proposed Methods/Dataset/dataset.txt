@@ -1,6 +1,0 @@
-
-BaseModel:MobileOne
-https://github.com/apple/ml-mobileone
-
-Dataset:
-[https://www.kaggle.com/datasets/sallyibrahim/skin-cancer-isic-2019-2020-malignant-or-benign]
