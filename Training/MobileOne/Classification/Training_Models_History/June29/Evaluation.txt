@@ -1,0 +1,31 @@
+# TEST ACCURACY 
+🔋 Using device: mps
+🌀 Model loaded and ready...
+📋 Classification Report:
+
+              precision    recall  f1-score   support
+
+      benign     0.7020    0.8376    0.7638      1145
+   malignant     0.7987    0.6445    0.7134      1145
+
+    accuracy                         0.7410      2290
+   macro avg     0.7504    0.7410    0.7386      2290
+weighted avg     0.7504    0.7410    0.7386      2290
+
+✅ Overall Accuracy: 0.7410
+
+# TEST LOSS 
+🔋 Using device: mps
+🌀 Model loaded and ready...
+📋 Classification Report:
+
+              precision    recall  f1-score   support
+
+      benign     0.7020    0.8376    0.7638      1145
+   malignant     0.7987    0.6445    0.7134      1145
+
+    accuracy                         0.7410      2290
+   macro avg     0.7504    0.7410    0.7386      2290
+weighted avg     0.7504    0.7410    0.7386      2290
+
+✅ Overall Accuracy: 0.7410

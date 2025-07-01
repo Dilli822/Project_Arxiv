@@ -11,6 +11,7 @@ from tqdm import tqdm
 import cv2
 import numpy as np
 from PIL import Image
+from sklearn.metrics import classification_report, confusion_matrix
 
 # Import MobileOne model
 try:
@@ -36,6 +37,29 @@ TRAIN_DIR = Path(os.path.expanduser("~/Downloads/MergedSC_split/train"))
 TEST_DIR = Path(os.path.expanduser("~/Downloads/MergedSC_split/test"))
 VAL_DIR = Path(os.path.expanduser("~/Downloads/MergedSC_split/val"))
 
+# Hyperparameters
+NUM_EPOCHS = 15 # Increased epochs for better training
+PATIENCE = 3  # Patience for Scheduler
+LR = 0.001
+L2 = 1e-7
+BATCH_SIZE = 16
+VARIANT = 's4'  # MobileOne variant
+HIDDEN_SIZE = 256  # GRU hidden size
+GRU_LAYERS = 1  # Number of GRU layers
+DROPOUT = 0.05  # Dropout rate for GRU and classifier
+
+# printing the hyperparameters
+print("📦 Hyperparameters:")
+print(f"  - BATCH_SIZE: {BATCH_SIZE}")
+print(f"  - NUM_EPOCHS: {NUM_EPOCHS}")
+print(f"  - PATIENCE: {PATIENCE}")
+print(f"  - LR: {LR}")
+print(f"  - L2: {L2}")
+print(f"  - VARIANT: {VARIANT}")
+print(f"  - HIDDEN_SIZE: {HIDDEN_SIZE}")
+print(f"  - GRU_LAYERS: {GRU_LAYERS}")
+print(f"  - DROPOUT: {DROPOUT}")
+
 # Validate paths
 for path in [CHECKPOINT_PATH, TRAIN_DIR, TEST_DIR, VAL_DIR]:
     if not path.exists():
@@ -43,50 +67,53 @@ for path in [CHECKPOINT_PATH, TRAIN_DIR, TEST_DIR, VAL_DIR]:
 
 # Median filter class using OpenCV
 class MedianFilterTransform:
-    def __init__(self, ksize=5):  # ksize must be odd and > 1
+    def __init__(self, ksize=5):
         self.ksize = ksize
 
     def __call__(self, img):
-        # Convert PIL to OpenCV (BGR)
         img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        
-        # Apply OpenCV's built-in median filter
         filtered = cv2.medianBlur(img_cv, self.ksize)
-        
-        # Convert back to PIL (RGB)
         filtered_rgb = cv2.cvtColor(filtered, cv2.COLOR_BGR2RGB)
         return Image.fromarray(filtered_rgb)
 
-median_filter = MedianFilterTransform(ksize=5)
+# Laplace Filter Transform
+class LaplaceFilterTransform:
+    def __init__(self, ksize=3):  # ksize must be odd and positive
+        self.ksize = ksize
+
+    def __call__(self, img):
+        img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        laplace = cv2.Laplacian(gray, ddepth=cv2.CV_64F, ksize=self.ksize)
+        laplace = cv2.convertScaleAbs(laplace)  # Convert back to 8-bit
+
+        # Stack back to 3 channels for consistency
+        laplace_3ch = cv2.merge([laplace, laplace, laplace])
+        laplace_rgb = cv2.cvtColor(laplace_3ch, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(laplace_rgb)
+
+# Instantiate transforms
+median_filter = MedianFilterTransform(ksize=3)
+laplace_filter = LaplaceFilterTransform(ksize=3)
 
 # Data transforms
 train_transform = transforms.Compose([
-    # Initial resizing
-    transforms.Resize(256),
-    
-    # Spatial transformations
-    transforms.RandomResizedCrop(224, scale=(0.6, 1.0)),  # Random crop with scale variation
-    transforms.RandomHorizontalFlip(p=0.5),  # Left-right flip
-    transforms.RandomVerticalFlip(p=0.2),  # Top-bottom flip
-    transforms.RandomRotation(30),  # Random rotation (±30°)
-    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), shear=10),  # Shift + shear
-    transforms.RandomPerspective(distortion_scale=0.3, p=0.5),  # 3D perspective warping
-    
-    # Color & texture transformations
-    transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),  # Color variations
-    transforms.RandomGrayscale(p=0.1),  # Random grayscale
-    transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.3),  # Sharpness variation
-    transforms.RandomAutocontrast(p=0.2),  # Auto-contrast adjustment
-    transforms.RandomPosterize(bits=4, p=0.1),  # Reduce color bits
-    transforms.RandomSolarize(threshold=192, p=0.1),  # Solarization effect
-    
-    # Noise & blur
-    transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),  # Random blur
-    
-    # Tensor conversion & normalization
-    transforms.ToTensor(),
-    transforms.RandomErasing(p=0.5, scale=(0.02, 0.2), ratio=(0.3, 3.3)),  # Random masking
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # ImageNet stats
+    transforms.Resize((224, 224)),
+    transforms.RandomAffine(
+        degrees=20,                 # Rotation
+        translate=(0.1, 0.1),       # Width and height shift: 10%
+        scale=(0.9, 1.1),           # Zoom range: ±10%
+        shear=10,                   # Shear: ±10°
+        fill=0                      # Fill empty areas with 0 (black)
+    ),
+    transforms.RandomResizedCrop(224, scale=(0.7, 1.0), ratio=(0.85, 1.15)),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomVerticalFlip(p=0.2),
+    transforms.RandomGrayscale(p=0.15),
+    transforms.RandomAdjustSharpness(sharpness_factor=1.7, p=0.25),
+    transforms.ToTensor(),  # only after all PIL transforms
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
 ])
 
 test_transform = transforms.Compose([
@@ -107,7 +134,6 @@ print(f"Classes: {class_names}")
 print(f"Number of classes: {num_classes}")
 
 # Create data loaders
-BATCH_SIZE = 24
 train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
@@ -116,10 +142,9 @@ print(f"Length of train dataloader: {len(train_dataloader)} batches of {BATCH_SI
 print(f"Length of test dataloader: {len(test_dataloader)} batches of {BATCH_SIZE}")
 print(f"Length of val dataloader: {len(val_dataloader)} batches of {BATCH_SIZE}")
 
-
 # Custom MobileOne + GRU Model
 class MobileOneGRUClassifier(nn.Module):
-    def __init__(self, num_classes=2, variant='s4', hidden_size=256, num_layers=2, dropout=0.3):
+    def __init__(self, num_classes=2, variant=VARIANT, hidden_size=HIDDEN_SIZE, num_layers=GRU_LAYERS, dropout=DROPOUT):
         super(MobileOneGRUClassifier, self).__init__()
         
         # Load pretrained MobileOne as feature extractor
@@ -207,7 +232,7 @@ def load_pretrained_mobileone(model, checkpoint_path, device):
         print("No checkpoint found. Using random initialization.")
 
 # Create model
-model = MobileOneGRUClassifier(num_classes=num_classes, variant='s4', hidden_size=256, num_layers=2, dropout=0.3)
+model = MobileOneGRUClassifier(num_classes=num_classes, variant=VARIANT, hidden_size=HIDDEN_SIZE, num_layers=GRU_LAYERS, dropout=DROPOUT)
 
 # Load pretrained weights
 load_pretrained_mobileone(model, CHECKPOINT_PATH, device)
@@ -227,8 +252,8 @@ loss_fn = nn.CrossEntropyLoss()
 # Optimizer (Adam, only trainable params)
 optimizer = torch.optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()),
-    lr=0.001,
-    weight_decay=1e-4
+    lr=LR,
+    weight_decay=L2
 )
 
 # Learning rate scheduler (Reduce LR on Plateau, monitoring val loss)
@@ -236,7 +261,7 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
     mode='min',          # we're minimizing val_loss
     factor=0.1,          # reduce LR by 10x
-    patience=3,          # wait 3 epochs without improvement
+    patience=PATIENCE,          # wait 3 epochs without improvement
 )
 
 def train_step(model, dataloader, loss_fn, optimizer, device):
@@ -325,7 +350,7 @@ def train_model(model, train_dataloader, test_dataloader, optimizer, loss_fn, ep
     val_loss_values, val_acc_values = [], []
     
     for epoch in range(epochs):
-        print(f"Epoch {epoch+1}/{epochs}")
+        print(f"🌀 Epoch {epoch+1}/{epochs}")
         train_loss, train_acc = train_step(model, train_dataloader, loss_fn, optimizer, device)
         test_loss, test_acc = test_step(model, test_dataloader, loss_fn, device)
         val_loss, val_acc = validate_model(model, val_dataloader, loss_fn, device)
@@ -373,13 +398,13 @@ def train_model(model, train_dataloader, test_dataloader, optimizer, loss_fn, ep
     }
 
 # Set random seeds for reproducibility
-torch.manual_seed(42)
-if device.type == 'cuda':
-    torch.cuda.manual_seed(42)
+seed_mps = torch.manual_seed(42)
+if device.type == 'mps':
+    torch.mps.manual_seed(42)
 
 # Start training
-print("Starting training with MobileOne + GRU architecture...")
-NUM_EPOCHS = 20 # Increased epochs for better training
+model = model.to(device)
+print(f"Starting training with MobileOne + GRU architecture...{seed_mps}")
 
 results = train_model(model=model,
                      train_dataloader=train_dataloader,
@@ -481,7 +506,6 @@ print(f"Test accuracy: {(test_predictions == test_labels).mean():.4f}")
 
 # Print class-wise performance
 if num_classes == 2:
-    from sklearn.metrics import classification_report, confusion_matrix
     print("\nClassification Report:")
     print(classification_report(test_labels, test_predictions, target_names=class_names))
     print("\nConfusion Matrix:")
